@@ -279,6 +279,7 @@ func (m *Manager) processNextDABlock() error {
 			err = multierr.Append(err, fetchErr)
 			time.Sleep(100 * time.Millisecond)
 		} else {
+			m.logger.Debug("retrieved potential blocks", "n", len(blockResp.Blocks), "daHeight", daHeight)
 			for _, block := range blockResp.Blocks {
 				m.blockInCh <- newBlockEvent{block, daHeight}
 			}
@@ -381,9 +382,22 @@ func (m *Manager) publishBlock(ctx context.Context) error {
 
 func (m *Manager) broadcastBlock(ctx context.Context, block *types.Block) error {
 	m.logger.Debug("submitting block to DA layer", "height", block.Header.Height)
-	res := m.dalc.SubmitBlock(block)
-	if res.Code != da.StatusSuccess {
-		return fmt.Errorf("DA layer submission failed: %s", res.Message)
+
+	// TODO(tzdybal): configuration option for max attempts
+	submitted := false
+	for attempt := 1; !submitted && attempt <= 10; attempt++ {
+		res := m.dalc.SubmitBlock(block)
+		if res.Code == da.StatusSuccess {
+			m.logger.Info("successfully submitted optimint block to DA layer", "optimintHeight", block.Header.Height, "daHeight", res.DAHeight)
+			submitted = true
+		} else {
+			m.logger.Error("DA layer submission failed", "error", res.Message, "attempt", attempt)
+		}
+	}
+
+	if !submitted {
+		// TODO(tzdybal): probably this should be handled better
+		panic("Failed to submit block to DA layer!")
 	}
 
 	m.HeaderOutCh <- &block.Header
